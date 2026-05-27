@@ -136,6 +136,7 @@ def get_tenant(slug: str):
         "ciudad": "Buenos Aires",
         "moneda": "USD",
         "estado_pago": "trial",
+        "requiere_pin": True,  # → el HTML muestra login screen email+password
     }
     # Merge overrides guardados via PATCH /tenant/{slug}/marca.
     try:
