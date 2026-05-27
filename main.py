@@ -27,6 +27,9 @@ import psycopg
 from psycopg.rows import dict_row
 from fastapi import FastAPI, HTTPException, Header, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import RedirectResponse
+from pathlib import Path
 from pydantic import BaseModel
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -98,7 +101,7 @@ class LoginIn(BaseModel):
 # ── Health & meta ────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
-    return {"ok": True, "service": "inmobiliaria-mica", "tenant": TENANT_SLUG}
+    return RedirectResponse(url="/app-inmobiliaria/", status_code=302)
 
 
 @app.get("/health")
@@ -301,3 +304,15 @@ def loteos_stub(_user=Depends(require_auth)):
 @app.get("/crm/resumenes")
 def resumenes_stub(_user=Depends(require_auth)):
     return {"items": [], "total": 0}
+
+
+# ── Static — sirve el CRM web bajo /app-inmobiliaria/ ────────────────────────
+# Montado al final para no pisar las rutas API. `html=True` hace que
+# GET /app-inmobiliaria/ devuelva index.html automáticamente.
+_static_dir = Path(__file__).parent / "static"
+if _static_dir.exists():
+    app.mount(
+        "/app-inmobiliaria",
+        StaticFiles(directory=str(_static_dir), html=True),
+        name="app",
+    )
