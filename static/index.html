@@ -4216,6 +4216,8 @@ tailwind.config = {
 
 <!-- Chart.js para reportes -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
 
 <!-- JS separados por panel -->
 <script src="js/_crm-helpers.js"></script>
@@ -6882,9 +6884,9 @@ async function eliminarActivo(id, nombre) {
 }
 
 // ── CHAT IA ─────────────────────────────────────────────────────────────────
-// 2026-05-27: migrado de n8n (cuota Airtable rota) al harness Mica.
-// Endpoint /chat devuelve JSON simple {respuesta, ok, tokens_in, ...}.
-const IA_WEBHOOK = 'https://agente.systemia.site/chat';
+// 2026-05-27: SSE streaming al harness Mica (mismo patrón que Robert).
+// Tokens progresivos + render markdown con marked + DOMPurify.
+const IA_WEBHOOK = 'https://agente.systemia.site/chat/stream';
 const IA_BEARER = 'njgEu6kGfxo5SVWnAd01jJBEW45RWTzMTrs_v3d06Wg';
 let iaChatOpen = false;
 let iaSessionId = 'session_' + Date.now();
@@ -6945,8 +6947,28 @@ async function enviarMensajeIA() {
   sendBtn.disabled = true;
   mostrarTyping();
 
+  // Burbuja del bot que llenamos progresivamente con chunks SSE.
+  const container = document.getElementById('iaChatMessages');
+  const botBubble = document.createElement('div');
+  botBubble.className = 'ia-msg bot';
+  let firstChunk = true;
+  let bubbleAdded = false;
+  let mdBuffer = '';
+
+  const renderMd = () => {
+    if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+      const rawHtml = marked.parse(mdBuffer, { breaks: true, gfm: true });
+      botBubble.innerHTML = DOMPurify.sanitize(rawHtml);
+    } else {
+      botBubble.textContent = mdBuffer;
+    }
+  };
+
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), 120000);
+
   try {
-    const res = await fetch(IA_WEBHOOK, {
+    const resp = await fetch(IA_WEBHOOK, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -6957,22 +6979,75 @@ async function enviarMensajeIA() {
         tenant_slug: 'mica-inmobiliaria-demo',
         session_id: iaSessionId
       }),
-      signal: AbortSignal.timeout(60000)
+      signal: controller.signal
     });
 
-    quitarTyping();
+    if (!resp.ok) { quitarTyping(); throw new Error('HTTP ' + resp.status); }
 
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const respuesta = data.respuesta || data.output || 'Sin respuesta del asistente.';
-    agregarMensaje(respuesta, 'bot');
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+
+        let eventName = 'message';
+        let dataStr = '';
+        for (const line of rawEvent.split('\n')) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+        }
+        if (!dataStr) continue;
+
+        let data;
+        try { data = JSON.parse(dataStr); } catch (e) { continue; }
+
+        if (eventName === 'text') {
+          if (firstChunk) {
+            quitarTyping();
+            container.appendChild(botBubble);
+            bubbleAdded = true;
+            firstChunk = false;
+          }
+          mdBuffer += (data.content || '');
+          renderMd();
+          container.scrollTop = container.scrollHeight;
+        } else if (eventName === 'done') {
+          if (!bubbleAdded) {
+            quitarTyping();
+            container.appendChild(botBubble);
+            bubbleAdded = true;
+            if (!mdBuffer) { mdBuffer = '_Sin respuesta del asistente._'; }
+          }
+          renderMd();
+        } else if (eventName === 'error') {
+          if (!bubbleAdded) {
+            quitarTyping();
+            container.appendChild(botBubble);
+            bubbleAdded = true;
+          }
+          mdBuffer = data.message || 'Error desconocido.';
+          renderMd();
+        }
+      }
+    }
   } catch (e) {
     quitarTyping();
-    const msg = e.name === 'TimeoutError'
-      ? 'La consulta tardó demasiado. Intentá de nuevo.'
-      : 'Error al conectar con el asistente. Verificá tu conexión.';
-    agregarMensaje(msg, 'bot');
+    if (!bubbleAdded) {
+      const msg = (e.name === 'AbortError')
+        ? 'La consulta tardó demasiado. Intentá de nuevo.'
+        : 'Error al conectar con el asistente. Verificá tu conexión.';
+      agregarMensaje(msg, 'bot');
+    }
   } finally {
+    clearTimeout(tid);
     sendBtn.disabled = false;
     input.focus();
   }
