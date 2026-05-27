@@ -129,9 +129,10 @@ def get_tenant(slug: str):
         "slug": TENANT_SLUG,
         "nombre": "Inmobiliaria Demo Mica",
         "api_url": "",          # vacío → el HTML usa SAAS_API actual
-        "api_prefix": "/crm",   # el HTML reusa /crm/* (compatibilidad)
+        "api_prefix": "",       # vacío → el HTML hace fetch(SAAS_API + '/crm/clientes') directo
+                                # (antes era '/crm' pero el HTML concatena /crm/clientes → /crm/crm/clientes)
         "color_primario": "#f59e0b",
-        "logo_url": "",
+        "logo_url": "/app-inmobiliaria/favicon.png",
         "ciudad": "Buenos Aires",
         "estado_pago": "trial",
     }
