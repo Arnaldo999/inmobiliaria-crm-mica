@@ -6882,7 +6882,10 @@ async function eliminarActivo(id, nombre) {
 }
 
 // ── CHAT IA ─────────────────────────────────────────────────────────────────
-const IA_WEBHOOK = 'https://n8n.arnaldoayalaestratega.cloud/webhook/crm-ia-chat-mica';
+// 2026-05-27: migrado de n8n (cuota Airtable rota) al harness Mica.
+// Endpoint /chat devuelve JSON simple {respuesta, ok, tokens_in, ...}.
+const IA_WEBHOOK = 'https://agente.systemia.site/chat';
+const IA_BEARER = 'njgEu6kGfxo5SVWnAd01jJBEW45RWTzMTrs_v3d06Wg';
 let iaChatOpen = false;
 let iaSessionId = 'session_' + Date.now();
 
@@ -6945,13 +6948,16 @@ async function enviarMensajeIA() {
   try {
     const res = await fetch(IA_WEBHOOK, {
       method: 'POST',
-      headers: _authHeaders(),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + IA_BEARER
+      },
       body: JSON.stringify({
         message: mensaje,
-        tenant_slug: TENANT_SLUG || 'mica-demo',
+        tenant_slug: 'mica-inmobiliaria-demo',
         session_id: iaSessionId
       }),
-      signal: AbortSignal.timeout(30000)
+      signal: AbortSignal.timeout(60000)
     });
 
     quitarTyping();
