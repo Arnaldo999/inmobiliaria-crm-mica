@@ -329,12 +329,14 @@ def _delete_row(table: str, row_id: int) -> dict:
     return {"ok": True, "id": row["id"]}
 
 
-# ── Rutas: leads ──────────────────────────────────────────────────────────────
+# ── Rutas CRUD ────────────────────────────────────────────────────────────────
+# Demo abierta: GET list/get sin auth (para que el HTML cargue sin token);
+# escrituras (POST/PATCH/DELETE) sí requieren JWT. Esto matchea cómo el HTML
+# hace fetch: GET sin headers, escrituras con _authHeaders().
 def _register_crud(table: str, prefixes: list[str]):
-    """Registra GET list, POST, PATCH /{id}, DELETE /{id} bajo cada prefijo."""
     for prefix in prefixes:
         @app.get(f"{prefix}", name=f"list_{table}_{prefix.replace('/', '_')}")
-        def _list(_user=Depends(require_auth), _table=table):
+        def _list(_table=table):
             return _list_rows(_table)
 
         @app.post(f"{prefix}", name=f"create_{table}_{prefix.replace('/', '_')}")
@@ -358,7 +360,7 @@ _register_crud("clientes_activos", ["/api/clientes-activos", "/crm/activos"])
 
 # ── Endpoints auxiliares que el HTML usa para dashboards ──────────────────────
 @app.get("/crm/metricas")
-def metricas(_user=Depends(require_auth)):
+def metricas():
     with db_cursor() as cur:
         cur.execute("SELECT estado, COUNT(*) AS n FROM leads WHERE tenant_slug=%s GROUP BY estado;", (TENANT_SLUG,))
         por_estado = {r["estado"]: r["n"] for r in cur.fetchall()}
@@ -377,46 +379,46 @@ def metricas(_user=Depends(require_auth)):
 
 
 @app.get("/crm/loteos")
-def loteos_stub(_user=Depends(require_auth)):
+def loteos_stub():
     # El HTML pide loteos; devolvemos vacío para el MVP demo.
     return []
 
 
 @app.get("/crm/resumenes")
-def resumenes_stub(_user=Depends(require_auth)):
+def resumenes_stub():
     return {"items": [], "total": 0}
 
 
 # ── Tablas extra que el HTML lista en el sidebar ──────────────────────────────
 @app.get("/crm/asesores")
-def list_asesores(_user=Depends(require_auth)):
+def list_asesores():
     return _list_rows("asesores")
 
 
 @app.get("/crm/personas")
-def list_personas(_user=Depends(require_auth)):
+def list_personas():
     # El HTML pide /crm/personas para el panel "Propietarios".
     return _list_rows("propietarios")
 
 
 @app.get("/crm/contratos")
-def list_contratos(_user=Depends(require_auth)):
+def list_contratos():
     return _list_rows("contratos")
 
 
 @app.get("/crm/contratos-alquiler")
-def list_contratos_alquiler(_user=Depends(require_auth)):
+def list_contratos_alquiler():
     # Stub vacío — la tabla `contratos_alquiler` no está migrada para Mica.
     return {"records": []}
 
 
 @app.get("/crm/visitas")
-def list_visitas(_user=Depends(require_auth)):
+def list_visitas():
     return _list_rows("visitas")
 
 
 @app.get("/crm/inmuebles")
-def list_inmuebles(_user=Depends(require_auth)):
+def list_inmuebles():
     # Stub vacío — tabla `inmuebles_renta` no migrada.
     return {"records": []}
 
