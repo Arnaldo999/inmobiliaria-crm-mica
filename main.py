@@ -125,17 +125,32 @@ def crm_version():
 def get_tenant(slug: str):
     if slug != TENANT_SLUG:
         raise HTTPException(404, f"tenant no encontrado: {slug}")
-    return {
+    base = {
         "slug": TENANT_SLUG,
         "nombre": "Inmobiliaria Demo Mica",
-        "api_url": "",          # vacío → el HTML usa SAAS_API actual
-        "api_prefix": "",       # vacío → el HTML hace fetch(SAAS_API + '/crm/clientes') directo
-                                # (antes era '/crm' pero el HTML concatena /crm/clientes → /crm/crm/clientes)
+        "api_url": "",
+        "api_prefix": "",
         "color_primario": "#f59e0b",
+        "color_acento": "#00d4aa",
         "logo_url": "/app-inmobiliaria/favicon.png",
         "ciudad": "Buenos Aires",
+        "moneda": "USD",
         "estado_pago": "trial",
     }
+    # Merge overrides guardados via PATCH /tenant/{slug}/marca.
+    try:
+        with db_cursor() as cur:
+            cur.execute(
+                "SELECT marca FROM tenant_config WHERE tenant_slug=%s LIMIT 1;",
+                (TENANT_SLUG,),
+            )
+            row = cur.fetchone()
+        if row and row.get("marca"):
+            base.update(row["marca"])
+    except Exception:
+        # tabla no existe todavía → ignorar, devolver defaults
+        pass
+    return base
 
 
 # ── Login ─────────────────────────────────────────────────────────────────────
@@ -191,16 +206,81 @@ EDITABLE: dict[str, set[str]] = {
 
 def _filter_cols(table: str, payload: dict) -> dict:
     cols = EDITABLE[table]
-    return {k: v for k, v in payload.items() if k in cols}
+    # Acepta tanto Airtable_Case (HTML legacy) como snake_case (API moderna).
+    snake_payload = {}
+    for k, v in payload.items():
+        snake_payload[_to_snake(k)] = v
+    return {k: v for k, v in snake_payload.items() if k in cols}
 
 
-def _list_rows(table: str) -> list[dict]:
+# ── Compat Airtable: el HTML está hecho para Airtable y espera ────────────────
+# {records: [{id: <str>, Nombre: ..., Tipo_Propiedad: ..., Fecha_WhatsApp: ...}]}
+# Mapeamos snake_case (Postgres) ↔ Airtable_Case (HTML).
+def _to_airtable_case(snake: str) -> str:
+    parts = snake.split("_")
+    out = []
+    for p in parts:
+        if p.lower() == "whatsapp":
+            out.append("WhatsApp")
+        else:
+            out.append(p.capitalize())
+    return "_".join(out)
+
+
+def _to_snake(airtable: str) -> str:
+    # Airtable_Case → snake_case (resistente a WhatsApp dentro del nombre).
+    import re
+    # Insertar _ antes de cada mayúscula que no sea la primera ni venga después de _
+    s = re.sub(r"(?<!^)(?<!_)([A-Z])", r"_\1", airtable)
+    return s.lower()
+
+
+def _transform_row(row: dict) -> dict:
+    """Convierte una row Postgres a formato Airtable-compat.
+
+    El HTML está hecho para Airtable y usa nombres con casing inconsistente
+    (Sub_nicho, Notas_Bot, Fecha_WhatsApp...). Para no romper nada por casing,
+    emitimos varias variantes por columna: snake_case original, PascalCase
+    todas las partes, y Pascal_lowercaseEnSegundaParte. El HTML usa la que
+    encuentre primero.
+    """
+    out = {}
+    for k, v in row.items():
+        if k == "id":
+            out["id"] = str(v)
+            continue
+        if k == "created_at":
+            iso = v.isoformat() if v else None
+            out["createdTime"] = iso
+            out["Created_At"] = iso
+            continue
+        if k == "updated_at":
+            out["Updated_At"] = v.isoformat() if v else None
+            continue
+
+        # Variante 1: snake_case original (Postgres native).
+        out[k] = v
+        # Variante 2: cada parte capitalize + WhatsApp special-case.
+        full_pascal = _to_airtable_case(k)
+        out[full_pascal] = v
+        # Variante 3: primera parte capitalize, resto lowercase (Sub_nicho style).
+        parts = k.split("_")
+        if len(parts) > 1:
+            mixed = parts[0].capitalize() + "_" + "_".join(p.lower() for p in parts[1:])
+            if mixed not in out:
+                out[mixed] = v
+    return out
+
+
+def _list_rows(table: str) -> dict:
+    """GET list: devuelve {records: [transformed_rows]} para compat HTML Airtable."""
     with db_cursor() as cur:
         cur.execute(
             f"SELECT * FROM {table} WHERE tenant_slug=%s ORDER BY id DESC LIMIT 500;",
             (TENANT_SLUG,),
         )
-        return cur.fetchall()
+        rows = cur.fetchall()
+    return {"records": [_transform_row(r) for r in rows]}
 
 
 def _insert_row(table: str, payload: dict) -> dict:
@@ -305,6 +385,88 @@ def loteos_stub(_user=Depends(require_auth)):
 @app.get("/crm/resumenes")
 def resumenes_stub(_user=Depends(require_auth)):
     return {"items": [], "total": 0}
+
+
+# ── Tablas extra que el HTML lista en el sidebar ──────────────────────────────
+@app.get("/crm/asesores")
+def list_asesores(_user=Depends(require_auth)):
+    return _list_rows("asesores")
+
+
+@app.get("/crm/personas")
+def list_personas(_user=Depends(require_auth)):
+    # El HTML pide /crm/personas para el panel "Propietarios".
+    return _list_rows("propietarios")
+
+
+@app.get("/crm/contratos")
+def list_contratos(_user=Depends(require_auth)):
+    return _list_rows("contratos")
+
+
+@app.get("/crm/contratos-alquiler")
+def list_contratos_alquiler(_user=Depends(require_auth)):
+    # Stub vacío — la tabla `contratos_alquiler` no está migrada para Mica.
+    return {"records": []}
+
+
+@app.get("/crm/visitas")
+def list_visitas(_user=Depends(require_auth)):
+    return _list_rows("visitas")
+
+
+@app.get("/crm/inmuebles")
+def list_inmuebles(_user=Depends(require_auth)):
+    # Stub vacío — tabla `inmuebles_renta` no migrada.
+    return {"records": []}
+
+
+# ── PATCH /tenant/{slug}/marca: guardar branding del CRM ──────────────────────
+# Persiste en tabla `tenant_config` (key/value JSONB). Se crea on-the-fly.
+def _ensure_tenant_config_table():
+    with db_cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS tenant_config (
+                tenant_slug VARCHAR(50) PRIMARY KEY,
+                marca JSONB NOT NULL DEFAULT '{}'::jsonb,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+
+@app.patch("/tenant/{slug}/marca")
+def update_marca(slug: str, body: dict = Body(...), _user=Depends(require_auth)):
+    if slug != TENANT_SLUG:
+        raise HTTPException(404, f"tenant no encontrado: {slug}")
+    _ensure_tenant_config_table()
+    # Whitelist de keys aceptadas (el HTML manda exactamente estas)
+    allowed = {"nombre", "ciudad", "moneda", "color_primario", "color_acento", "logo_url"}
+    clean = {k: v for k, v in (body or {}).items() if k in allowed}
+    if not clean:
+        raise HTTPException(400, "Sin campos válidos para actualizar")
+    with db_cursor() as cur:
+        cur.execute("""
+            INSERT INTO tenant_config (tenant_slug, marca, updated_at)
+            VALUES (%s, %s::jsonb, CURRENT_TIMESTAMP)
+            ON CONFLICT (tenant_slug) DO UPDATE
+              SET marca = tenant_config.marca || EXCLUDED.marca,
+                  updated_at = CURRENT_TIMESTAMP
+            RETURNING marca;
+        """, (TENANT_SLUG, __import__('json').dumps(clean)))
+        row = cur.fetchone()
+    return row["marca"] if row else clean
+
+
+@app.post("/crm/upload-imagen")
+async def upload_imagen(_user=Depends(require_auth)):
+    # Stub: sin Cloudinary creds aún. Devolvemos error claro para que el HTML
+    # muestre "Error al subir" en vez de quedarse colgado. Cuando tengas las
+    # creds CLOUDINARY_CLOUD_NAME / API_KEY / API_SECRET, implementar el upload
+    # real con la lib cloudinary.
+    raise HTTPException(
+        501,
+        "Upload de imágenes no configurado todavía. Pegá la URL del logo manualmente.",
+    )
 
 
 # ── Static — sirve el CRM web bajo /app-inmobiliaria/ ────────────────────────
