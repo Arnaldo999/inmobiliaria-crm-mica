@@ -5711,25 +5711,24 @@ async function subirImagenPropiedad(input) {
   status.textContent = '⏳ Subiendo...';
   status.style.color = 'var(--yellow)';
   try {
-    const base64 = await new Promise((res, rej) => {
-      const reader = new FileReader();
-      reader.onload = () => res(reader.result);
-      reader.onerror = rej;
-      reader.readAsDataURL(file);
-    });
-    const r = await fetch(`${API_BASE}/crm/upload-imagen`, {
+    // Upload directo browser → Cloudinary (mismo patrón que el logo de marca).
+    // Usa unsigned preset 'social_media_posts' del cloud 'dmqkqcreo'.
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('upload_preset', 'social_media_posts');
+    fd.append('folder', 'system_ia/inmobiliaria-mica-demo/propiedades');
+    const res = await fetch('https://api.cloudinary.com/v1_1/dmqkqcreo/image/upload', {
       method: 'POST',
-      headers: _authHeaders(),
-      body: JSON.stringify({image: base64}),
+      body: fd,
     });
-    const data = await r.json();
-    if (data.status === 'ok' && data.url) {
-      document.getElementById('prop-imagen').value = data.url;
-      document.getElementById('prop-imagen-preview').innerHTML = `<img src="${data.url}" style="max-width:200px;border-radius:8px">`;
+    const data = await res.json();
+    if (data.secure_url) {
+      document.getElementById('prop-imagen').value = data.secure_url;
+      document.getElementById('prop-imagen-preview').innerHTML = `<img src="${data.secure_url}" style="max-width:200px;border-radius:8px">`;
       status.textContent = '✅ Subida';
       status.style.color = 'var(--green)';
     } else {
-      status.textContent = '❌ Error';
+      status.textContent = '❌ Error: ' + (data.error?.message || 'sin URL');
       status.style.color = 'var(--red)';
     }
   } catch (e) {
@@ -6508,7 +6507,7 @@ async function onLogoFileChange(input) {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('upload_preset', 'social_media_posts');
-    fd.append('folder', 'system_ia/logos');
+    fd.append('folder', 'system_ia/inmobiliaria-mica-demo/logos');
     const res = await fetch('https://api.cloudinary.com/v1_1/dmqkqcreo/image/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (data.secure_url) {
